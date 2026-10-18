@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>HydroPlumber: High Pressure Puzzle</title>
+<style>
+  * {
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    background: #1e2630;
+    color: #e0e8f0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+  }
+  #header {
+    width: 100%;
+    max-width: 900px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    background: #161c24;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    z-index: 10;
+  }
+  .info-box {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+  }
+  .badge {
+    background: #2a3441;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: bold;
+    font-size: 14px;
+    border: 1px solid #3d4a5c;
+    letter-spacing: 0.5px;
+  }
+  .badge.alert {
+    background: #872323;
+    border-color: #ff5252;
+    color: #fff;
+    animation: pulse 1s infinite alternate;
+  }
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    100% { transform: scale(1.05); }
+  }
+  .btn {
+    background: linear-gradient(180deg, #3a7bd5, #205bb5);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 3px 0 #12376e;
+    transition: all 0.1s;
+    font-size: 14px;
+  }
+  .btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #12376e;
+  }
+  .btn.valve-btn {
+    background: linear-gradient(180deg, #d33939, #991c1c);
+    box-shadow: 0 3px 0 #5c0f0f;
+  }
+  .btn.valve-btn.on {
+    background: linear-gradient(180deg, #2ecc71, #219653);
+    box-shadow: 0 3px 0 #145a32;
+  }
+  #canvas-container {
+    position: relative;
+    margin: auto;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    cursor: pointer;
+    background: #1b212a;
+  }
+  #footer {
+    padding: 8px;
+    font-size: 12px;
+    color: #8da2ba;
+    text-align: center;
+  }
+  /* Overlay modal for Victory */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 15, 22, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 50;
+  }
+  #overlay.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #overlay h2 {
+    font-size: 38px;
+    color: #64ffda;
+    margin-bottom: 10px;
+    text-shadow: 0 0 12px rgba(100,255,218,0.5);
+  }
+  #overlay p {
+    font-size: 18px;
+    margin-bottom: 25px;
+    color: #e2e8f0;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="info-box">
+    <div id="level-title" class="badge">Level 1/5</div>
+    <div id="faucet-status" class="badge">Faucets: 0/1</div>
+    <div id="leak-status" class="badge">Leaks: 0</div>
+  </div>
+  <div class="info-box">
+    <button id="valve-btn" class="btn valve-btn">OPEN VALVE</button>
+    <button id="reset-btn" class="btn">Clear Grid</button>
+  </div>
+</div>
+
+<div id="canvas-container">
+  <canvas id="game"></canvas>
+  <div id="overlay">
+    <h2>PERFECT FLOW!</h2>
+    <p>All faucets running with zero leaks!</p>
+    <button id="next-btn" class="btn" style="font-size: 18px; padding: 12px 28px;">Next Job &rarr;</button>
+  </div>
+</div>
+
+<div id="footer">
+  💡 <b>Left Click/Tap:</b> Cycle component &nbsp;|&nbsp; <b>Right Click:</b> Reverse Cycle &nbsp;|&nbsp; Route water without leaking!
+</div>
+
+<script>
+// --- AUDIO SYNTHESIS ENGINE ---
+class SoundController {
+  constructor() {
+    this.ctx = null;
+  }
+  init() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+  playClick() {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(480, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.05);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.05);
+  }
+  playValve(on) {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(on ? 150 : 300, this.ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(on ? 350 : 120, this.ctx.currentTime + 0.2);
+    gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.2);
+  }
+  playVictory() {
+    if (!this.ctx) return;
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C, E, G, High C
+    notes.forEach((freq, idx) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, this.ctx.currentTime + idx * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + idx * 0.12 + 0.4);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(this.ctx.currentTime + idx * 0.12);
+      osc.stop(this.ctx.currentTime + idx * 0.12 + 0.45);
+    });
+  }
+}
+
+const sound = new SoundController();
+
+// --- PIPE DEFINITIONS ---
+// Direction bits: UP: 1 (0001), RIGHT: 2 (0010), DOWN: 4 (0100), LEFT: 8 (1000)
+const UP = 1, RIGHT = 2, DOWN = 4, LEFT = 8;
+const OPPOSITE = { [UP]: DOWN, [DOWN]: UP, [LEFT]: RIGHT, [RIGHT]: LEFT };
+const DIR_DELTA = {
+  [UP]: { x: 0, y: -1 },
+  [RIGHT]: { x: 1, y: 0 },
+  [DOWN]: { x: 0, y: 1 },
+  [LEFT]: { x: -1, y: 0 }
+};
+
+// Available components for player cycling:
+// 0: Empty
+// 1: Straight H
+// 2: Straight V
+// 3: Elbow UR (└)
+// 4: Elbow RD (┌)
+// 5: Elbow DL (┐)
+// 6: Elbow LU (┘)
+// 7: Tee U (┴)
+// 8: Tee R (├)
+// 9: Tee D (┬)
+// 10: Tee L (┤)
+// 11: Cross (+)
+const PIPE_TYPES = [
+  { id: 0, name: 'Empty', mask: 0 },
+  { id: 1, name: 'Straight H', mask: LEFT | RIGHT },
+  { id: 2, name: 'Straight V', mask: UP | DOWN },
+  { id: 3, name: 'Elbow UR', mask: UP | RIGHT },
+  { id: 4, name: 'Elbow RD', mask: RIGHT | DOWN },
+  { id: 5, name: 'Elbow DL', mask: DOWN | LEFT },
+  { id: 6, name: 'Elbow LU', mask: LEFT | UP },
+  { id: 7, name: 'Tee U', mask: LEFT | UP | RIGHT },
+  { id: 8, name: 'Tee R', mask: UP | RIGHT | DOWN },
+  { id: 9, name: 'Tee D', mask: RIGHT | DOWN | LEFT },
+  { id: 10, name: 'Tee L', mask: DOWN | LEFT | UP },
+  { id: 11, name: 'Cross', mask: UP | RIGHT | DOWN | LEFT }
+];
+
+// --- LEVELS CONFIGURATION ---
+const LEVELS = [
+  {
+    cols: 7, rows: 5,
+    source: { x: 0, y: 2, dir: RIGHT },
+    faucets: [{ x: 6, y: 2, dir: LEFT, sinkY: 3.5 }],
+    blocks: []
+  },
+  {
+    cols: 7, rows: 5,
+    source: { x: 0, y: 1, dir: RIGHT },
+    faucets: [
+      { x: 6, y: 1, dir: LEFT, sinkY: 2.2 },
+      { x: 6, y: 3, dir: LEFT, sinkY: 4.2 }
+    ],
+    blocks: [{ x: 3, y: 1 }]
+  },
+  {
+    cols: 8, rows: 6,
+    source: { x: 0, y: 0, dir: RIGHT },
+    faucets: [
+      { x: 4, y: 5, dir: UP, sinkY: 5.8 },
+      { x: 7, y: 2, dir: LEFT, sinkY: 3.2 }
+    ],
+    blocks: [{ x: 2, y: 0 }, { x: 2, y: 1 }, { x: 5, y: 3 }]
+  },
+  {
+    cols: 8, rows: 6,
+    source: { x: 3, y: 0, dir: DOWN },
+    faucets: [
+      { x: 0, y: 4, dir: RIGHT, sinkY: 5.2 },
+      { x: 7, y: 4, dir: LEFT, sinkY: 5.2 },
+      { x: 3, y: 5, dir: UP, sinkY: 5.9 }
+    ],
+    blocks: [{ x: 3, y: 2 }]
+  },
+  {
+    cols: 8, rows: 6,
+    source: { x: 0, y: 3, dir: RIGHT },
+    faucets: [
+      { x: 4, y: 0, dir: DOWN, sinkY: 1.2 },
+      { x: 7, y: 1, dir: LEFT, sinkY: 2.2 },
+      { x: 7, y: 5, dir: LEFT, sinkY: 5.9 }
+    ],
+    blocks: [{ x: 3, y: 3 }, { x: 4, y: 3 }, { x: 5, y: 3 }]
+  }
+];
+
+// --- MAIN GAME APPLICATION ---
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const levelTitle = document.getElementById('level-title');
+const faucetStatus = document.getElementById('faucet-status');
+const leakStatus = document.getElementById('leak-status');
+const valveBtn = document.getElementById('valve-btn');
+const resetBtn = document.getElementById('reset-btn');
+const overlay = document.getElementById('overlay');
+const nextBtn = document.getElementById('next-btn');
+
+let currentLevelIdx = 0;
+let level = LEVELS[currentLevelIdx];
+let grid = [];
+let valveOpen = true; // start open so player immediately sees feedback
+let particles = [];
+let leaks = [];
+let faucetsState = [];
+let victory = false;
+let tileSize = 80;
+let offsetX = 0;
+let offsetY = 0;
+let duckBobTimer = 0;
+
+function initLevel(idx) {
+  currentLevelIdx = idx % LEVELS.length;
+  level = LEVELS[currentLevelIdx];
+  victory = false;
+  overlay.classList.remove('active');
+  levelTitle.textContent = `Job ${currentLevelIdx + 1}/${LEVELS.length}`;
+  
+  // Resize canvas based on grid
+  tileSize = Math.min(84, Math.floor((window.innerHeight - 170) / (level.rows + 1)));
+  canvas.width = (level.cols + 2) * tileSize;
+  canvas.height = (level.rows + 1.6) * tileSize;
+  offsetX = tileSize;
+  offsetY = tileSize * 0.8;
+
+  // Initialize empty grid
+  grid = [];
+  for (let y = 0; y < level.rows; y++) {
+    const row = [];
+    for (let x = 0; x < level.cols; x++) {
+      row.push(0); // empty pipe type id
+    }
+    grid.push(row);
+  }
+
+  // Clear particles
+  particles = [];
+  updateHydraulics();
+}
+
+// Check hydraulic connectivity, leaks, and faucet status
+function updateHydraulics() {
+  leaks = [];
+  faucetsState = level.faucets.map(() => ({ active: false, fill: 0 }));
+  
+  if (!valveOpen) return;
+
+  // Track visited pipes and connection flow
+  const visited = new Set();
+  const queue = [];
+
+  // Start from source
+  const sx = level.source.x;
+  const sy = level.source.y;
+  const sdir = level.source.dir;
+  const startKey = `${sx},${sy}`;
+
+  // Check if tile receiving from source can accept it
+  const firstTilePipe = grid[sy] ? PIPE_TYPES[grid[sy][sx]] : null;
+  if (firstTilePipe && (firstTilePipe.mask & OPPOSITE[sdir])) {
+    queue.push({ x: sx, y: sy, enterDir: OPPOSITE[sdir] });
+    visited.add(startKey);
+  } else {
+    // Water sprays out directly from the source wall flange!
+    leaks.push({
+      x: sx - DIR_DELTA[sdir].x * 0.4,
+      y: sy - DIR_DELTA[sdir].y * 0.4,
+      dir: sdir,
+      tileX: sx,
+      tileY: sy
+    });
+  }
+
+  while (queue.length > 0) {
+    const { x, y, enterDir } = queue.shift();
+    const pipe = PIPE_TYPES[grid[y][x]];
+    const mask = pipe.mask;
+
+    // Check all open ports on this pipe piece
+    [UP, RIGHT, DOWN, LEFT].forEach(dir => {
+      if ((mask & dir) && dir !== enterDir) {
+        const delta = DIR_DELTA[dir];
+        const nx = x + delta.x;
+        const ny = y + delta.y;
+
+        // Check if connecting to a faucet
+        let hitFaucet = false;
+        level.faucets.forEach((faucet, fIdx) => {
+          if (faucet.x === nx && faucet.y === ny && faucet.dir === OPPOSITE[dir]) {
+            faucetsState[fIdx].active = true;
+            hitFaucet = true;
+          }
+        });
+        if (hitFaucet) return;
+
+        // Check if out of bounds or neighbor has no matching port
+        if (nx < 0 || nx >= level.cols || ny < 0 || ny >= level.rows) {
+          // Open port into wall/boundary -> Leak!
+          leaks.push({ x, y, dir, tileX: x, tileY: y });
+        } else {
+          const neighborPipe = PIPE_TYPES[grid[ny][nx]];
+          const neighborOpposite = OPPOSITE[dir];
+          if (!(neighborPipe.mask & neighborOpposite)) {
+            // Port facing empty space or blocked piece -> Leak!
+            leaks.push({ x, y, dir, tileX: x, tileY: y });
+          } else {
+            // Valid connection!
+            const nKey = `${nx},${ny}`;
+            if (!visited.has(nKey)) {
+              visited.add(nKey);
+              queue.push({ x: nx, y: ny, enterDir: neighborOpposite });
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Update UI stats
+  const activeFaucets = faucetsState.filter(f => f.active).length;
+  faucetStatus.textContent = `Faucets: ${activeFaucets}/${level.faucets.length}`;
+  leakStatus.textContent = `Leaks: ${leaks.length}`;
+  if (leaks.length > 0) {
+    leakStatus.classList.add('alert');
+  } else {
+    leakStatus.classList.remove('alert');
+  }
+
+  // Victory check: All faucets active AND exactly 0 leaks!
+  if (valveOpen && activeFaucets === level.faucets.length && leaks.length === 0 && !victory) {
+    victory = true;
+    sound.playVictory();
+    setTimeout(() => {
+      overlay.classList.add('active');
+    }, 600);
+  }
+}
+
+// Particle System for Physical Water Spray & Faucets
+function spawnParticles() {
+  if (!valveOpen) return;
+
+  // 1. Spawn leak particles with high velocity physics
+  leaks.forEach(leak => {
+    for (let i = 0; i < 3; i++) {
+      const delta = DIR_DELTA[leak.dir];
+      const px = offsetX + leak.x * tileSize + tileSize / 2 + delta.x * (tileSize * 0.45);
+      const py = offsetY + leak.y * tileSize + tileSize / 2 + delta.y * (tileSize * 0.45);
+      
+      const speed = 4 + Math.random() * 5;
+      const spread = (Math.random() - 0.5) * 1.8;
+      let vx = delta.x * speed + (delta.y !== 0 ? spread : 0);
+      let vy = delta.y * speed + (delta.x !== 0 ? spread : 0);
+
+      particles.push({
+        x: px,
+        y: py,
+        vx: vx,
+        vy: vy,
+        life: 1.0,
+        decay: 0.02 + Math.random() * 0.03,
+        size: 3 + Math.random() * 3,
+        color: '#4fc3f7',
+        isLeak: true
+      });
+    }
+  });
+
+  // 2. Spawn faucet stream pouring down into sinks
+  level.faucets.forEach((faucet, idx) => {
+    if (faucetsState[idx] && faucetsState[idx].active) {
+      const fx = offsetX + faucet.x * tileSize + tileSize / 2;
+      const fy = offsetY + faucet.y * tileSize + tileSize * 0.7;
+      for (let i = 0; i < 2; i++) {
+        particles.push({
+          x: fx + (Math.random() - 0.5) * 6,
+          y: fy,
+          vx: (Math.random() - 0.5) * 1.2,
+          vy: 2 + Math.random() * 4,
+          life: 0.9,
+          decay: 0.03,
+          size: 3.5 + Math.random() * 2,
+          color: '#29b6f6',
+          isLeak: false,
+          targetY: offsetY + faucet.sinkY * tileSize + tileSize * 0.3
+        });
+      }
+    }
+  });
+}
+
+function updatePhysics() {
+  const gravity = 0.22;
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.vy += gravity;
+    p.vx *= 0.99;
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= p.decay;
+
+    // Splash onto sink floor
+    if (!p.isLeak && p.targetY && p.y >= p.targetY) {
+      p.vy = -p.vy * 0.25;
+      p.vx = (Math.random() - 0.5) * 3;
+      p.y = p.targetY;
+      p.life -= 0.1;
+    }
+
+    if (p.life <= 0 || p.y > canvas.height + 20) {
+      particles.splice(i, 1);
+    }
+  }
+}
+
+// --- RENDERING ROUTINES ---
+function drawGridBlueprint() {
+  ctx.fillStyle = '#1a222d';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Background subway tile pattern
+  ctx.strokeStyle = '#242f3e';
+  ctx.lineWidth = 1;
+  const tileH = tileSize / 2;
+  for (let y = 0; y < canvas.height; y += tileH) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+    const stagger = ((y / tileH) % 2) * (tileSize / 2);
+    for (let x = stagger; x < canvas.width; x += tileSize) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y + tileH);
+      ctx.stroke();
+    }
+  }
+
+  // Draw tile slots
+  for (let y = 0; y < level.rows; y++) {
+    for (let x = 0; x < level.cols; x++) {
+      const px = offsetX + x * tileSize;
+      const py = offsetY + y * tileSize;
+
+      // Check if blocked obstacle
+      const isBlocked = level.blocks.some(b => b.x === x && b.y === y);
+      if (isBlocked) {
+        ctx.fillStyle = '#10151c';
+        ctx.fillRect(px + 4, py + 4, tileSize - 8, tileSize - 8);
+        ctx.strokeStyle = '#394657';
+        ctx.strokeRect(px + 4, py + 4, tileSize - 8, tileSize - 8);
+        // Hazard cross stripes
+        ctx.strokeStyle = 'rgba(255, 180, 0, 0.2)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(px + 4, py + 4);
+        ctx.lineTo(px + tileSize - 4, py + tileSize - 4);
+        ctx.moveTo(px + tileSize - 4, py + 4);
+        ctx.lineTo(px + 4, py + tileSize - 4);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(25, 36, 50, 0.7)';
+        ctx.fillRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
+      }
+    }
+  }
+}
+
+// Draw Source Water Pump Unit
+function drawSource() {
+  const sx = offsetX + level.source.x * tileSize;
+  const sy = offsetY + level.source.y * tileSize;
+  const cx = sx + tileSize / 2;
+  const cy = sy + tileSize / 2;
+
+  // Pump Main Body
+  ctx.save();
+  ctx.fillStyle = '#2c3e50';
+  ctx.strokeStyle = '#34495e';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx - 30, cy, 26, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Valve Wheel
+  ctx.fillStyle = valveOpen ? '#e74c3c' : '#7f8c8d';
+  ctx.beginPath();
+  ctx.arc(cx - 30, cy, 18, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Spokes
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.5;
+  for (let a = 0; a < 4; a++) {
+    const angle = a * (Math.PI / 2) + (valveOpen ? Date.now() * 0.002 : 0);
+    ctx.beginPath();
+    ctx.moveTo(cx - 30, cy);
+    ctx.lineTo(cx - 30 + Math.cos(angle) * 16, cy + Math.sin(angle) * 16);
+    ctx.stroke();
+  }
+
+  // Pipe Outlet coupling
+  ctx.fillStyle = '#d35400';
+  ctx.fillRect(cx - 10, cy - 14, 20, 28);
+  ctx.fillStyle = '#f39c12';
+  ctx.fillRect(cx + 6, cy - 18, 8, 36);
+
+  ctx.restore();
+}
+
+// Draw Porcelain Sinks & Faucets
+function drawFaucets() {
+  duckBobTimer += 0.05;
+  level.faucets.forEach((faucet, idx) => {
+    const fx = offsetX + faucet.x * tileSize + tileSize / 2;
+    const fy = offsetY + faucet.y * tileSize + tileSize / 2;
+    const active = faucetsState[idx] && faucetsState[idx].active;
+
+    ctx.save();
+    // Faucet Pipe coupling
+    ctx.fillStyle = '#7f8c8d';
+    ctx.fillRect(fx - 12, fy - 12, 24, 24);
+
+    // Brass curved neck
+    ctx.strokeStyle = '#f1c40f';
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.lineTo(fx, fy + tileSize * 0.35);
+    ctx.stroke();
+
+    // Nozzle
+    ctx.fillStyle = '#d4ac0d';
+    ctx.fillRect(fx - 8, fy + tileSize * 0.3, 16, 8);
+
+    // Porcelain Basin below
+    const basinY = offsetY + faucet.sinkY * tileSize;
+    const basinW = tileSize * 1.1;
+    const basinH = tileSize * 0.55;
+    
+    // Basin Drop Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(fx, basinY + basinH + 2, basinW * 0.55, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Outer porcelain
+    ctx.fillStyle = '#ecf0f1';
+    ctx.beginPath();
+    ctx.ellipse(fx, basinY + basinH * 0.5, basinW * 0.5, basinH * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#bdc3c7';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Water Pool in Basin
+    ctx.fillStyle = active ? '#3498db' : '#2c3e50';
+    ctx.beginPath();
+    ctx.ellipse(fx, basinY + basinH * 0.5 + 4, basinW * 0.4, basinH * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rubber Ducky floating in the sink!
+    const duckY = basinY + basinH * 0.5 + (active ? Math.sin(duckBobTimer + idx) * 3 : 4);
+    const duckX = fx + (active ? Math.cos(duckBobTimer * 0.7) * 4 : 0);
+    // Body
+    ctx.fillStyle = '#f1c40f';
+    ctx.beginPath();
+    ctx.ellipse(duckX, duckY, 11, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Head
+    ctx.beginPath();
+    ctx.arc(duckX + 6, duckY - 6, 6, 0, Math.PI * 2);
+    ctx.fill();
+    // Beak
+    ctx.fillStyle = '#e67e22';
+    ctx.beginPath();
+    ctx.arc(duckX + 11, duckY - 5, 3, 0, Math.PI * 2);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(duckX + 7, duckY - 8, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  });
+}
+
+// Draw a specific pipe component
+function drawPipe(px, py, typeId) {
+  if (typeId === 0) return;
+  const pipe = PIPE_TYPES[typeId];
+  const cx = px + tileSize / 2;
+  const cy = py + tileSize / 2;
+  const pipeWidth = tileSize * 0.32;
+  const half = pipeWidth / 2;
+
+  ctx.save();
+  ctx.lineCap = 'butt';
+
+  // Base metallic pipe casing
+  ctx.fillStyle = '#b87333'; // Copper base
+  ctx.strokeStyle = '#78471b';
+  ctx.lineWidth = 2;
+
+  const hasU = !!(pipe.mask & UP);
+  const hasR = !!(pipe.mask & RIGHT);
+  const hasD = !!(pipe.mask & DOWN);
+  const hasL = !!(pipe.mask & LEFT);
+
+  // Fill center hub
+  ctx.fillRect(cx - half, cy - half, pipeWidth, pipeWidth);
+
+  // Extend arms
+  if (hasU) ctx.fillRect(cx - half, py, pipeWidth, half);
+  if (hasD) ctx.fillRect(cx - half, cy, pipeWidth, half + (tileSize / 2 - half));
+  if (hasL) ctx.fillRect(px, cy - half, half, pipeWidth);
+  if (hasR) ctx.fillRect(cx, cy - half, half + (tileSize / 2 - half), pipeWidth);
+
+  // Outer Highlight for 3D metallic feel
+  ctx.fillStyle = 'rgba(255, 230, 180, 0.4)';
+  if (hasU || hasD) {
+    ctx.fillRect(cx - half + 3, py + (hasU ? 0 : half), 4, tileSize - (hasU && hasD ? 0 : half));
+  }
+  if (hasL || hasR) {
+    ctx.fillRect(px + (hasL ? 0 : half), cy - half + 3, tileSize - (hasL && hasR ? 0 : half), 4);
+  }
+
+  // End Flanges/collars
+  ctx.fillStyle = '#874c18';
+  if (hasU) ctx.fillRect(cx - half - 4, py, pipeWidth + 8, 6);
+  if (hasD) ctx.fillRect(cx - half - 4, py + tileSize - 6, pipeWidth + 8, 6);
+  if (hasL) ctx.fillRect(px, cy - half - 4, 6, pipeWidth + 8);
+  if (hasR) ctx.fillRect(px + tileSize - 6, cy - half - 4, 6, pipeWidth + 8);
+
+  // Flowing Water Core when active
+  if (valveOpen) {
+    ctx.fillStyle = '#38bdf8';
+    const innerW = pipeWidth * 0.45;
+    const inHalf = innerW / 2;
+    ctx.fillRect(cx - inHalf, cy - inHalf, innerW, innerW);
+    if (hasU) ctx.fillRect(cx - inHalf, py, innerW, half);
+    if (hasD) ctx.fillRect(cx - inHalf, cy, innerW, tileSize / 2);
+    if (hasL) ctx.fillRect(px, cy - inHalf, half, innerW);
+    if (hasR) ctx.fillRect(cx, cy - inHalf, tileSize / 2, innerW);
+  }
+
+  ctx.restore();
+}
+
+function render() {
+  drawGridBlueprint();
+  drawSource();
+  drawFaucets();
+
+  // Draw Grid Pipes
+  for (let y = 0; y < level.rows; y++) {
+    for (let x = 0; x < level.cols; x++) {
+      const typeId = grid[y][x];
+      const px = offsetX + x * tileSize;
+      const py = offsetY + y * tileSize;
+      drawPipe(px, py, typeId);
+    }
+  }
+
+  // Draw Physics Particles
+  ctx.save();
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Visual warning beacons on leak ports
+  if (valveOpen && leaks.length > 0) {
+    ctx.save();
+    const pulse = (Math.sin(Date.now() * 0.015) + 1) * 0.5;
+    ctx.strokeStyle = `rgba(255, 50, 50, ${0.4 + pulse * 0.6})`;
+    ctx.lineWidth = 3;
+    leaks.forEach(leak => {
+      const delta = DIR_DELTA[leak.dir];
+      const lx = offsetX + leak.x * tileSize + tileSize / 2 + delta.x * (tileSize * 0.48);
+      const ly = offsetY + leak.y * tileSize + tileSize / 2 + delta.y * (tileSize * 0.48);
+      ctx.beginPath();
+      ctx.arc(lx, ly, 8 + pulse * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+}
+
+// --- GAME LOOP ---
+function gameLoop() {
+  spawnParticles();
+  updatePhysics();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// --- INTERACTION & EVENT HANDLING ---
+function handleTileInteraction(gridX, gridY, reverse = false) {
+  sound.init();
+  if (gridX < 0 || gridX >= level.cols || gridY < 0 || gridY >= level.rows) return;
+  
+  // Obstacles cannot be altered
+  const isBlocked = level.blocks.some(b => b.x === gridX && b.y === gridY);
+  if (isBlocked) return;
+
+  const currentId = grid[gridY][gridX];
+  let nextId;
+  if (!reverse) {
+    nextId = (currentId + 1) % PIPE_TYPES.length;
+  } else {
+    nextId = (currentId - 1 + PIPE_TYPES.length) % PIPE_TYPES.length;
+  }
+
+  grid[gridY][gridX] = nextId;
+  sound.playClick();
+  updateHydraulics();
+}
+
+function getGridPosFromMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const clientX = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
+  const clientY = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
+  const mouseX = clientX * scaleX;
+  const mouseY = clientY * scaleY;
+
+  const gx = Math.floor((mouseX - offsetX) / tileSize);
+  const gy = Math.floor((mouseY - offsetY) / tileSize);
+  return { gx, gy };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const { gx, gy } = getGridPosFromMouse(e);
+  handleTileInteraction(gx, gy, e.button === 2);
+});
+
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+});
+
+// Touch support for mobile / tablets
+let touchStartTime = 0;
+canvas.addEventListener('touchstart', (e) => {
+  touchStartTime = Date.now();
+}, { passive: true });
+
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  const touchDuration = Date.now() - touchStartTime;
+  const { gx, gy } = getGridPosFromMouse(e.changedTouches[0]);
+  // Long press acts as reverse cycle / clear
+  handleTileInteraction(gx, gy, touchDuration > 450);
+});
+
+// Header Buttons
+valveBtn.addEventListener('click', () => {
+  sound.init();
+  valveOpen = !valveOpen;
+  sound.playValve(valveOpen);
+  valveBtn.textContent = valveOpen ? 'SHUT VALVE' : 'OPEN VALVE';
+  valveBtn.classList.toggle('on', valveOpen);
+  updateHydraulics();
+});
+
+resetBtn.addEventListener('click', () => {
+  sound.init();
+  sound.playClick();
+  for (let y = 0; y < level.rows; y++) {
+    for (let x = 0; x < level.cols; x++) {
+      grid[y][x] = 0;
+    }
+  }
+  updateHydraulics();
+});
+
+nextBtn.addEventListener('click', () => {
+  sound.init();
+  initLevel(currentLevelIdx + 1);
+});
+
+// Start Game
+initLevel(0);
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
